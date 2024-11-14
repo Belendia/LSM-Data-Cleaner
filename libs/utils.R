@@ -11,11 +11,11 @@ calculate_distance <- function(lat1, long1, lat2, long2) {
 }
 
 # Calculate distances between all households and store in a matrix
-compute_distance_matrix <- function(df, row = nrow(df), col=nrow(df)) {
-  dist_matrix <- matrix(NA, nrow = row, ncol = col)
+compute_distance_matrix <- function(df, total_households = nrow(df)) {
+  dist_matrix <- matrix(NA, nrow = total_households, ncol = total_households)
   
-  for (i in 1:row) {
-    for (j in i:col) {
+  for (i in 1:total_households) {
+    for (j in i:total_households) {
       dist_matrix[i, j] <- calculate_distance(df$`_Capture_GPS_latitude`[i], df$`_Capture_GPS_longitude`[i], 
                                               df$`_Capture_GPS_latitude`[j], df$`_Capture_GPS_longitude`[j])
     }
