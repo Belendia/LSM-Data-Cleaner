@@ -32,103 +32,15 @@ compute_distance_matrix <- function(df, total_households = nrow(df)) {
   return(dist_matrix)
 }
 
-# This function iterates through pairs of duplicate households and updates a column to link each household 
-# to its duplicate. For each pair, it assigns the row number of the second household to the first and 
-# vice versa. If a household already has duplicate references, it appends the new reference to the existing 
-# ones as a comma-separated string.
 
-link_duplicate_household_rows <- function(df, total_households) {
-  # Create an empty vector to store the row number of the duplicate pair
-  duplicate_column <- rep(NA, total_households)
-  
-  for (i in 1:nrow(df)) {
-    hh1 <- df[i, 1]
-    hh2 <- df[i, 2]
-    
-    # Assign the duplicate pair row number to the new column (for both rows)
-    duplicate_column[hh1] <- ifelse(is.na(duplicate_column[hh1]), hh2, paste(duplicate_column[hh1], hh2, sep = ","))
-    duplicate_column[hh2] <- ifelse(is.na(duplicate_column[hh2]), hh1, paste(duplicate_column[hh2], hh1, sep = ","))
-  }
-  
-  return(duplicate_column)
-}
-
-
-# # Function to find outliers in household clusters
-# find_outliers <- function(households_data) {
-#   households_data %>%
-#     group_by(Kebele) %>%
-#     mutate(
-#       # Calculate the centroid for each Kebele
-#       centroid_longitude = mean(X_Capture_GPS_longitude, na.rm = TRUE),
-#       centroid_latitude = mean(X_Capture_GPS_latitude, na.rm = TRUE),
-#       
-#       # Calculate the distance of each household from the centroid (in meters)
-#       distance_from_centroid = distGeo(
-#         cbind(X_Capture_GPS_longitude, X_Capture_GPS_latitude),
-#         cbind(centroid_longitude, centroid_latitude)
-#       )
-#     ) %>%
-#     ungroup() %>%
-#     group_by(Kebele) %>%
-#     mutate(
-#       # Identify outliers using the IQR method
-#       Q1 = quantile(distance_from_centroid, 0.20, na.rm = TRUE),
-#       Q3 = quantile(distance_from_centroid, 0.80, na.rm = TRUE),
-#       IQR = Q3 - Q1,
-#       lower_bound = Q1 - 1.5 * IQR,
-#       upper_bound = Q3 + 1.5 * IQR,
-#       is_outlier = distance_from_centroid < lower_bound | distance_from_centroid > upper_bound
-#     ) %>%
-#     ungroup() 
-# }
-
-# # Function to find outliers based on convex hull intersection
-# find_outliers_by_intersection <- function(households_data) {
-#   # Convert data to sf (Simple Features) for spatial operations
-#   households_sf <- households_data %>%
-#     st_as_sf(coords = c("X_Capture_GPS_longitude", "X_Capture_GPS_latitude"), crs = 4326)
-#   
-#   # Compute convex hull for each Kebele
-#   convex_hulls <- households_sf %>%
-#     group_by(Kebele) %>%
-#     summarise(geometry = st_convex_hull(st_union(geometry))) %>%
-#     ungroup()
-#   
-#   # Find intersections between convex hulls of neighboring Kebeles
-#   intersections <- st_intersects(convex_hulls, convex_hulls, sparse = FALSE)
-#   intersection_points <- list()
-#   
-#   for (i in 1:nrow(intersections)) {
-#     for (j in 1:ncol(intersections)) {
-#       if (i < j && intersections[i, j]) {
-#         intersect_geom <- st_intersection(convex_hulls[i, ], convex_hulls[j, ])
-#         intersection_points[[paste(i, j, sep = "_")]] <- intersect_geom
-#       }
-#     }
-#   }
-#   
-#   # Combine intersection points into a single sf object
-#   intersection_points_sf <- do.call(rbind, intersection_points) %>%
-#     st_as_sf() %>%
-#     st_cast("POINT")
-#   
-#   # Identify households lying on intersection points
-#   households_data$is_outlier <- st_intersects(households_sf, intersection_points_sf, sparse = FALSE) %>%
-#     rowSums() > 0
-#   
-#   households_data
-# }
-
-
-# Function to check and reassign Kebele for miscategorized households
-correct_kebele <- function(household_data, distance_matrix) {
+# Function to check and reassign Kebele, Transect and Clustered for mis-categorized households
+update_categories <- function(household_data, distance_matrix) {
   
   # Initialize columns for outliers and corrected kebeles
   households_data <- household_data %>%
-    mutate(Outlier_Kebele = FALSE, Corrected_Kebele = Kebele,
-           Outlier_Transect = FALSE, Corrected_Transect = Transect,
-           Outlier_Cluster = FALSE, Corrected_Cluster = Cluster)
+    mutate(Is_Kebele_Outlier = FALSE, Corrected_Kebele = Kebele,
+           Is_Transect_Outlier = FALSE, Corrected_Transect = Transect,
+           Is_Cluster_Outlier = FALSE, Corrected_Cluster = Cluster)
   
   # Correct the Kebele column based on neighbors
   for (i in 1:nrow(households_data)) {
@@ -146,23 +58,9 @@ correct_kebele <- function(household_data, distance_matrix) {
     
     # If the current household's Kebele is not the same as the most common Kebele
     if (!is.na(most_common_kebele) && households_data$Kebele[i] != most_common_kebele) {
-      households_data$Outlier_Kebele[i] <- TRUE
+      households_data$Is_Kebele_Outlier[i] <- TRUE
       households_data$Corrected_Kebele[i] <- most_common_kebele
     }
-  }
-  
-  return(households_data)
-}
-
-correct_transect <- function(households_data, distance_matrix) {
-  
-  # Correct the Kebele column based on neighbors
-  for (i in 1:nrow(households_data)) {
-    # Get the UUID of the current household
-    current_uuid <- households_data$X_uuid[i]
-    
-    # Find the indices of neighbors within the distance threshold (excluding the current household itself)
-    neighbor_indices <- order(distance_matrix[current_uuid, ])[2:6]
     
     # Extract neighboring Transect (using X_uuid to reference the row)
     neighboring_transect <- households_data$Corrected_Transect[neighbor_indices]
@@ -172,23 +70,9 @@ correct_transect <- function(households_data, distance_matrix) {
     
     # If the current household's Transect is not the same as the most common Kebele
     if (!is.na(most_common_transect) && households_data$Transect[i] != most_common_transect) {
-      households_data$Outlier_Transect[i] <- TRUE
+      households_data$Is_Transect_Outlier[i] <- TRUE
       households_data$Corrected_Transect[i] <- most_common_transect
     }
-  }
-  
-  return(households_data)
-}
-
-correct_cluster <- function(households_data, distance_matrix) {
-  
-  # Correct the Kebele column based on neighbors
-  for (i in 1:nrow(households_data)) {
-    # Get the UUID of the current household
-    current_uuid <- households_data$X_uuid[i]
-    
-    # Find the indices of neighbors within the distance threshold (excluding the current household itself)
-    neighbor_indices <- order(distance_matrix[current_uuid, ])[2:6]
     
     # Extract neighboring Cluster (using X_uuid to reference the row)
     neighboring_cluster <- households_data$Corrected_Cluster[neighbor_indices]
@@ -198,7 +82,7 @@ correct_cluster <- function(households_data, distance_matrix) {
     
     # If the current household's Cluster is not the same as the most common Kebele
     if (!is.na(neighboring_cluster) && households_data$Cluster[i] != neighboring_cluster) {
-      households_data$Outlier_Cluster[i] <- TRUE
+      households_data$Is_Cluster_Outlier[i] <- TRUE
       households_data$Corrected_Cluster[i] <- neighboring_cluster
     }
   }
@@ -216,15 +100,10 @@ plot_kebele_map <- function(households_data, kebele_boundary) {
     addTiles() %>%
     addPolygons(
       data = kebele_boundary,  # The GeoJSON or shapefile data for the Kebele boundary
-      fill = FALSE,            # Don't fill the polygon, just show the border
-      color = "black",         # Border color
-      weight = 2,              # Border weight (thickness)
+      fill = FALSE,            
+      color = "black",        
+      weight = 2,              
       opacity = 1,
-      # highlightOptions = highlightOptions(
-      #   weight = 5,
-      #   color = "red",
-      #   bringToFront = TRUE
-      # ),# Border opacity
       popup = ~paste("Kebele:", Kebele)
     ) %>%
     addCircleMarkers(
@@ -239,11 +118,10 @@ plot_kebele_map <- function(households_data, kebele_boundary) {
         "Transect:", Transect, "<br>",
         "Cluster:", Cluster, "<br>",
         "Type:", type, "<br>",
-        "Outlier Kebele:", Outlier_Kebele, "<br>",
+        "Is Kebele Outlier:", Is_Kebele_Outlier, "<br>",
         "Corrected Kebele:", Corrected_Kebele, "<br>",
         "ID:", unique_id
-      ),# Customize popup as needed
-      #clusterOptions = markerClusterOptions()
+      ),
     ) %>%
     setView(lng = mean(households_data$X_Capture_GPS_longitude), lat = mean(households_data$X_Capture_GPS_latitude), zoom = 12) %>%
     addLegend("bottomright",
@@ -253,7 +131,7 @@ plot_kebele_map <- function(households_data, kebele_boundary) {
 }
 
 plot_map_with_filter <- function(households_data) {
-  kebele_palette <- colorFactor(c("red", "blue", "green", "purple"), domain = households_data$Corrected_Transect)
+  kebele_palette <- colorFactor(c("red", "blue", "darkgreen", "purple"), domain = households_data$Corrected_Transect)
   dash_styles <- c("1", "5,5", "10,5", "10,10", "1,10")
   radii <- c(7, 8, 9, 10, 11)
   opacities <- c(0.3, 0.4, 0.5, 0.6, 0.7)
@@ -262,7 +140,7 @@ plot_map_with_filter <- function(households_data) {
   map <- leaflet(households_data) %>%
     addTiles()
   
-  # Add CircleMarkers for each Corrected_Kebele as a separate group
+  # Add CircleMarkers for each Corrected Kebele as a separate group
   for (kebele in unique(households_data$Corrected_Kebele)) {
     kebele_data <- households_data %>% filter(Corrected_Kebele == kebele)
     
@@ -282,11 +160,11 @@ plot_map_with_filter <- function(households_data) {
           "Transect:", Transect, "<br>",
           "Cluster:", Cluster, "<br>",
           "Type:", type, "<br>",
-          "Outlier Kebele:", Outlier_Kebele, "<br>",
+          "Is Kebele Outlier:", Is_Kebele_Outlier, "<br>",
           "Corrected Kebele:", Corrected_Kebele, "<br>",
-          "Outlier Transect:", Outlier_Transect, "<br>",
+          "Is Transect Outlier:", Is_Transect_Outlier, "<br>",
           "Corrected Transect:", Corrected_Transect, "<br>",
-          "Outlier Cluster:", Outlier_Cluster, "<br>",
+          "Is Cluster Outlier:", Is_Cluster_Outlier, "<br>",
           "Corrected Cluster:", Corrected_Cluster, "<br>",
           "ODK ID:", X_uuid, "<br>",
           "ID:", unique_id
